@@ -68,8 +68,7 @@ public actor xAIRealtimeSession {
     ///
     /// Auth is passed via `Sec-WebSocket-Protocol` (`xai-client-secret.<bearer-or-ephemeral>`)
     /// because `URLSessionWebSocketTask` strips the `Authorization` header during
-    /// the HTTP→WebSocket upgrade on Apple platforms. The xAI iOS cookbook
-    /// (`VoiceAgentWebSocket.swift`) uses the same pattern.
+    /// the HTTP→WebSocket upgrade on Apple platforms.
     public static func open(
         configuration: Configuration,
         urlSession: URLSession? = nil
@@ -108,7 +107,16 @@ public actor xAIRealtimeSession {
                 return
             } catch {
                 if !isClosed {
-                    continuation.finish(throwing: error)
+                    // The xAI server uses WebSocket close code 4401 to signal
+                    // "ephemeral token expired" (per the realtime-clients.md
+                    // best-practices section). Surface it as a typed error so
+                    // callers can drive the mint-and-reconnect loop without
+                    // poking at URLError internals.
+                    if task.closeCode.rawValue == 4401 {
+                        continuation.finish(throwing: xAIRealtimeError.ephemeralExpired)
+                    } else {
+                        continuation.finish(throwing: error)
+                    }
                 }
                 return
             }
@@ -141,6 +149,11 @@ public actor xAIRealtimeSession {
     /// Apply a typed session configuration. Sends `session.update`.
     public func updateSession(_ config: xAIRealtimeSessionConfig) async throws {
         try await sendRaw(jsonString: xAIRealtimeOutbound.sessionUpdate(config))
+    }
+
+    /// Apply a typed session configuration plus a list of tools.
+    public func updateSession(_ config: xAIRealtimeSessionConfig, tools: [xAIRealtimeTool]) async throws {
+        try await sendRaw(jsonString: xAIRealtimeOutbound.sessionUpdate(config, tools: tools))
     }
 
     /// Append base64 PCM (or μ-law/A-law per the session's input format).

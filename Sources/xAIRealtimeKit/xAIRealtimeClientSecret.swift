@@ -9,9 +9,9 @@
 //
 //  SERVER-SIDE ONLY. Calling this from a shipped client app would defeat the
 //  point — the whole reason ephemerals exist is to keep the long-lived API key
-//  off the device. Run this on your backend (or on the OpenClaw gateway) and
-//  ship the resulting `value` to iOS/web clients via your own RPC, then
-//  authenticate the WebSocket with ``xAIRealtimeAuth/ephemeralToken(_:)``.
+//  off the device. Run this on your backend and ship the resulting `value` to
+//  iOS/web clients via your own RPC, then authenticate the WebSocket with
+//  ``xAIRealtimeAuth/ephemeralToken(_:)``.
 //
 
 import Foundation

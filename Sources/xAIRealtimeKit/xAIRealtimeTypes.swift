@@ -1,8 +1,7 @@
 //
 //  xAIRealtimeTypes.swift
 //  Public type-safe enums and Codable payloads for the xAI Voice Agent API.
-//  Source: https://docs.x.ai/docs/voice-agent-api (also mirrored at
-//  openclaw-xai-speech/docs/voice-agent-api.md).
+//  Source: https://docs.x.ai/docs/voice-agent-api
 //
 
 import Foundation
@@ -28,8 +27,9 @@ public enum xAIRealtimeVoice: String, Sendable, CaseIterable {
 // MARK: - Auth
 
 /// Two auth modes per the xAI docs. `apiKey` is server-only — for client apps
-/// (iOS, browser) mint an ephemeral via the gateway's
-/// `POST /v1/realtime/client_secrets` and pass it as `.ephemeralToken`.
+/// (iOS, browser) mint an ephemeral server-side via
+/// ``xAIRealtimeClientSecret/mint(apiKey:expiresAfterSeconds:urlSession:baseURL:)``
+/// and pass the resulting `value` as `.ephemeralToken`.
 public enum xAIRealtimeAuth: Sendable, Equatable {
     /// Raw xAI API key. Server-only — exposes the key on the device.
     case apiKey(String)

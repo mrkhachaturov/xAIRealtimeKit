@@ -2,10 +2,10 @@
 //  xAIRealtimeEvent.swift
 //  Typed server -> client events emitted by the xAI Voice Agent API.
 //
-//  The Voice Agent API is OpenAI-Realtime-compatible. We surface the events
-//  the iOS cookbook ([VoiceAgentConversation.swift](https://github.com/xai-org/xai-cookbook))
-//  handles, plus a `.unknown` escape hatch so callers can decode anything else
-//  themselves without losing data.
+//  The Voice Agent API is OpenAI-Realtime-compatible. The modeled cases cover
+//  every event documented in https://docs.x.ai/docs/voice-agent-api ; a
+//  `.unknown(type:jsonText:)` case preserves the raw frame for forward
+//  compatibility so callers can decode new server events without losing data.
 //
 
 import Foundation

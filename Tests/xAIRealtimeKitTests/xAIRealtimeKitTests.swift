@@ -331,6 +331,109 @@ import Testing
     }
 }
 
+// MARK: - Tools
+
+@Suite struct xAIRealtimeToolTests {
+    @Test func webSearchEncodesAsTypeOnly() throws {
+        let d = try xAIRealtimeTool.webSearch.toAny()
+        #expect(d["type"] as? String == "web_search")
+        #expect(d.count == 1)
+    }
+
+    @Test func fileSearchIncludesVectorStoreIds() throws {
+        let d = try xAIRealtimeTool.fileSearch(vectorStoreIds: ["vs_a", "vs_b"], maxNumResults: 10).toAny()
+        #expect(d["type"] as? String == "file_search")
+        #expect(d["vector_store_ids"] as? [String] == ["vs_a", "vs_b"])
+        #expect(d["max_num_results"] as? Int == 10)
+    }
+
+    @Test func fileSearchOmitsMaxResultsWhenNil() throws {
+        let d = try xAIRealtimeTool.fileSearch(vectorStoreIds: ["vs_x"], maxNumResults: nil).toAny()
+        #expect(d["max_num_results"] == nil)
+    }
+
+    @Test func xSearchHandlesOptional() throws {
+        let none = try xAIRealtimeTool.xSearch(allowedXHandles: nil).toAny()
+        #expect(none["allowed_x_handles"] == nil)
+        let some = try xAIRealtimeTool.xSearch(allowedXHandles: ["elonmusk", "xai"]).toAny()
+        #expect(some["allowed_x_handles"] as? [String] == ["elonmusk", "xai"])
+    }
+
+    @Test func mcpEmitsAllConfiguredFields() throws {
+        let cfg = xAIRealtimeTool.MCPConfig(
+            serverUrl: "https://mcp.example.com/mcp",
+            serverLabel: "my-tools",
+            serverDescription: "biz tools",
+            allowedTools: ["lookup_order"],
+            authorization: "Bearer xyz",
+            headers: ["X-Custom": "v"]
+        )
+        let d = try xAIRealtimeTool.mcp(cfg).toAny()
+        #expect(d["type"] as? String == "mcp")
+        #expect(d["server_url"] as? String == "https://mcp.example.com/mcp")
+        #expect(d["server_label"] as? String == "my-tools")
+        #expect(d["server_description"] as? String == "biz tools")
+        #expect(d["allowed_tools"] as? [String] == ["lookup_order"])
+        #expect(d["authorization"] as? String == "Bearer xyz")
+        let headers = d["headers"] as? [String: String]
+        #expect(headers?["X-Custom"] == "v")
+    }
+
+    @Test func mcpOmitsOptionalFieldsWhenNil() throws {
+        let d = try xAIRealtimeTool.mcp(.init(serverUrl: "https://x", serverLabel: "l")).toAny()
+        #expect(d["server_description"] == nil)
+        #expect(d["allowed_tools"] == nil)
+        #expect(d["authorization"] == nil)
+        #expect(d["headers"] == nil)
+    }
+
+    @Test func functionParsesParametersJSONIntoNestedObject() throws {
+        let params = #"{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}"#
+        let d = try xAIRealtimeTool.function(name: "get_weather", description: "weather", parametersJSON: params).toAny()
+        #expect(d["type"] as? String == "function")
+        #expect(d["name"] as? String == "get_weather")
+        #expect(d["description"] as? String == "weather")
+        let nested = d["parameters"] as! [String: Any]
+        #expect(nested["type"] as? String == "object")
+        let required = nested["required"] as! [String]
+        #expect(required == ["location"])
+    }
+
+    @Test func functionRejectsNonObjectParameters() {
+        #expect(throws: xAIRealtimeError.self) {
+            try xAIRealtimeTool.function(name: "f", parametersJSON: "[1,2,3]").toAny()
+        }
+        #expect(throws: xAIRealtimeError.self) {
+            try xAIRealtimeTool.function(name: "f", parametersJSON: "not json").toAny()
+        }
+    }
+}
+
+@Suite struct xAIRealtimeSessionUpdateWithToolsTests {
+    @Test func mergesTypedConfigAndTools() throws {
+        let frame = try xAIRealtimeOutbound.sessionUpdate(
+            .init(voice: .eve, instructions: "you are brief"),
+            tools: [.webSearch, .xSearch(allowedXHandles: ["xai"])]
+        )
+        let json = try JSONSerialization.jsonObject(with: Data(frame.utf8)) as! [String: Any]
+        #expect(json["type"] as? String == "session.update")
+        let session = json["session"] as! [String: Any]
+        #expect(session["voice"] as? String == "eve")
+        #expect(session["instructions"] as? String == "you are brief")
+        let tools = session["tools"] as! [[String: Any]]
+        #expect(tools.count == 2)
+        #expect(tools[0]["type"] as? String == "web_search")
+        #expect(tools[1]["type"] as? String == "x_search")
+    }
+
+    @Test func emptyToolsArrayOmitsToolsField() throws {
+        let frame = try xAIRealtimeOutbound.sessionUpdate(.init(voice: .rex), tools: [])
+        let json = try JSONSerialization.jsonObject(with: Data(frame.utf8)) as! [String: Any]
+        let session = json["session"] as! [String: Any]
+        #expect(session["tools"] == nil)
+    }
+}
+
 @Suite struct xAIRealtimeErrorTests {
     @Test func errorDescriptionsAreNonEmpty() {
         let cases: [xAIRealtimeError] = [
@@ -338,10 +441,15 @@ import Testing
             .http(status: 401, body: "bad key"),
             .server(code: "max_duration", message: "session expired"),
             .encoding("bad payload"), .decoding("bad frame"),
+            .ephemeralExpired,
             .canceled
         ]
         for err in cases {
             #expect((err.errorDescription ?? "").isEmpty == false)
         }
+    }
+
+    @Test func ephemeralExpiredMessageMentions4401() {
+        #expect(xAIRealtimeError.ephemeralExpired.errorDescription?.contains("4401") == true)
     }
 }

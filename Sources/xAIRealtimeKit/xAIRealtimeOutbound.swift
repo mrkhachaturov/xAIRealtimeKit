@@ -21,12 +21,34 @@ public enum xAIRealtimeOutbound {
     }
 
     /// Build a `session.update` from a raw dictionary body — for fields not
-    /// covered by ``xAIRealtimeSessionConfig`` (e.g. tools).
+    /// covered by ``xAIRealtimeSessionConfig``.
     public static func sessionUpdate(rawSession json: String) throws -> String {
         guard let data = json.data(using: .utf8),
               let _ = try? JSONSerialization.jsonObject(with: data)
         else { throw xAIRealtimeError.encoding("rawSession must be valid JSON") }
         return #"{"type":"session.update","session":"# + json + "}"
+    }
+
+    /// Build a `session.update` from a typed config plus a list of typed
+    /// `xAIRealtimeTool` definitions. The two payloads are merged so callers
+    /// don't have to choose between typed config and tool support.
+    public static func sessionUpdate(_ config: xAIRealtimeSessionConfig, tools: [xAIRealtimeTool]) throws -> String {
+        let configData: Data
+        do {
+            let encoder = JSONEncoder()
+            configData = try encoder.encode(config)
+        } catch {
+            throw xAIRealtimeError.encoding(String(describing: error))
+        }
+        var sessionDict = ((try? JSONSerialization.jsonObject(with: configData)) as? [String: Any]) ?? [:]
+        if !tools.isEmpty {
+            sessionDict["tools"] = try tools.map { try $0.toAny() }
+        }
+        let envelope: [String: Any] = ["type": "session.update", "session": sessionDict]
+        guard let data = try? JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys]),
+              let s = String(data: data, encoding: .utf8)
+        else { throw xAIRealtimeError.encoding("could not serialize session.update with tools") }
+        return s
     }
 
     // MARK: - input_audio_buffer.*
