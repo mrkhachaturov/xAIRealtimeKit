@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — auto-pong, nonisolated audio helpers, drain-without-polling
+
+- `xAIRealtimeSession.Configuration.autoPong` (default `true`) — the receive loop now replies to server `ping` events with a matching `pong` before yielding the `.ping` to the consumer, so a slow consumer can't starve the server's keepalive budget. Set `false` to drive keepalive yourself.
+- Drop `@MainActor` from `xAIRealtimeAudioInputTap.install` / `stop` / `finish` and `xAIRealtimeAudioOutputPlayer.attach` / `start` / `play` / `interrupt` / `stop`. Callable from any isolation domain, matching `AVAudioEngine`'s own contract — no forced main-thread hop when bootstrapping audio off-main.
+- `xAIRealtimeAudioOutputPlayer.waitForPlaybackToDrain()` is now backed by `CheckedContinuation` waiters resumed from the `.dataPlayedBack` callback. No polling, no `pollIntervalMillis` knob. `interrupt()` and `stop()` also wake pending waiters so they don't hang.
+- `play(base64:)` doc-comment clarified — kept as a convenience for callers using `sendRaw(jsonString:)` who bypass the typed event decoder; iterators of `events` should use `play(pcm16Bytes:)` since `.audioDelta` already delivers decoded bytes.
+
 ## 0.2.0 — typed tools, audio helpers, ephemeral-expired signal
 
 - Add typed `xAIRealtimeTool` enum covering all five documented tool types — `fileSearch(vectorStoreIds:maxNumResults:)`, `webSearch`, `xSearch(allowedXHandles:)`, `mcp(MCPConfig)`, `function(name:description:parametersJSON:)` — with a `toAny()` renderer that validates function `parametersJSON` at encode time

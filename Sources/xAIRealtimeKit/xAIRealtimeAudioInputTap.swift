@@ -52,7 +52,10 @@ public final class xAIRealtimeAudioInputTap: @unchecked Sendable {
     /// Install a tap on the engine's `inputNode`. The caller owns the engine
     /// (`AVAudioSession` category, `.prepare()`, `.start()`, lifecycle).
     /// Throws if the input format is invalid or the converter can't be built.
-    @MainActor
+    ///
+    /// Callable from any isolation domain — matches `AVAudioEngine`'s own
+    /// contract. Don't call `install` and `stop`/`finish` concurrently on the
+    /// same instance; the helper holds a single engine reference.
     public func install(on engine: AVAudioEngine) throws {
         let inputFormat = engine.inputNode.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0 else {
@@ -86,14 +89,12 @@ public final class xAIRealtimeAudioInputTap: @unchecked Sendable {
 
     /// Remove the tap. The streams stay open (next `install` will reuse them);
     /// call ``finish()`` to terminate them.
-    @MainActor
     public func stop() {
         attachedEngine?.inputNode.removeTap(onBus: 0)
         attachedEngine = nil
     }
 
     /// Stop the tap AND terminate the streams so consumers exit their loops.
-    @MainActor
     public func finish() {
         stop()
         chunkContinuation.finish()

@@ -434,6 +434,20 @@ import Testing
     }
 }
 
+// MARK: - Configuration defaults
+
+@Suite struct xAIRealtimeConfigurationTests {
+    @Test func autoPongDefaultsOn() {
+        let cfg = xAIRealtimeSession.Configuration(auth: .apiKey("k"))
+        #expect(cfg.autoPong == true)
+    }
+
+    @Test func autoPongOptOut() {
+        let cfg = xAIRealtimeSession.Configuration(auth: .apiKey("k"), autoPong: false)
+        #expect(cfg.autoPong == false)
+    }
+}
+
 @Suite struct xAIRealtimeErrorTests {
     @Test func errorDescriptionsAreNonEmpty() {
         let cases: [xAIRealtimeError] = [

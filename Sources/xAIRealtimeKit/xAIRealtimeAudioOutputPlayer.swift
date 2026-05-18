@@ -5,7 +5,7 @@
 //  — matched to the xAI realtime default output format.
 //
 //  Implements the "wait for playback to drain" hook required by the xAI Voice
-//  Agent best practices section on audio overlap during tool calls:
+//  Agent best practices on audio overlap during tool calls:
 //
 //    1. Receive response.function_call_arguments.done
 //    2. Send conversation.item.create with function_call_output
@@ -27,8 +27,12 @@ public final class xAIRealtimeAudioOutputPlayer: @unchecked Sendable {
     private let outputFormat: AVAudioFormat
     private weak var attachedEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
-    /// Outstanding scheduled buffers that haven't reached the speaker yet.
-    private let pending = OSAllocatedUnfairLock<Int>(initialState: 0)
+
+    private struct PlaybackState {
+        var pending: Int = 0
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+    private let state = OSAllocatedUnfairLock<PlaybackState>(initialState: .init())
 
     public init(sampleRate: Double = defaultSampleRate) {
         self.sampleRate = sampleRate
@@ -43,7 +47,9 @@ public final class xAIRealtimeAudioOutputPlayer: @unchecked Sendable {
     /// Attach an `AVAudioPlayerNode` to the engine's main mixer at the
     /// configured sample rate. Call before `engine.start()` and before
     /// enabling voice processing on the input node, if any.
-    @MainActor
+    ///
+    /// Callable from any isolation domain — matches `AVAudioEngine`'s own
+    /// contract. Don't call `attach` / `stop` concurrently.
     public func attach(to engine: AVAudioEngine) {
         let player = AVAudioPlayerNode()
         engine.attach(player)
@@ -53,7 +59,6 @@ public final class xAIRealtimeAudioOutputPlayer: @unchecked Sendable {
     }
 
     /// Start the player node. Safe to call repeatedly.
-    @MainActor
     public func start() {
         guard let player = playerNode, !player.isPlaying else { return }
         player.play()
@@ -61,7 +66,12 @@ public final class xAIRealtimeAudioOutputPlayer: @unchecked Sendable {
 
     /// Decode base64 PCM16 (the shape of `response.output_audio.delta.delta`)
     /// and schedule it for playback.
-    @MainActor
+    ///
+    /// Convenience for callers that bypass the typed event decoder (e.g.
+    /// consumers of ``xAIRealtimeSession/sendRaw(jsonString:)`` who decode
+    /// frames themselves). If you're iterating ``xAIRealtimeSession/events``,
+    /// `.audioDelta` already delivers the bytes pre-decoded — use
+    /// ``play(pcm16Bytes:)`` instead.
     public func play(base64 b64: String) {
         guard let data = Data(base64Encoded: b64) else { return }
         play(pcm16Bytes: data)
@@ -69,7 +79,6 @@ public final class xAIRealtimeAudioOutputPlayer: @unchecked Sendable {
 
     /// Schedule a raw PCM16 buffer (Int16 little-endian, mono, at the
     /// configured `sampleRate`) for playback.
-    @MainActor
     public func play(pcm16Bytes: Data) {
         guard let player = playerNode,
               let engine = attachedEngine,
@@ -87,37 +96,60 @@ public final class xAIRealtimeAudioOutputPlayer: @unchecked Sendable {
                 floats[i] = Float(src[i]) / Float(Int16.max)
             }
         }
-        pending.withLock { $0 += 1 }
-        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [pending] _ in
-            pending.withLock { $0 = max(0, $0 - 1) }
+        state.withLock { $0.pending += 1 }
+        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [state] _ in
+            let waiters = state.withLock { s -> [CheckedContinuation<Void, Never>] in
+                s.pending = max(0, s.pending - 1)
+                guard s.pending == 0 else { return [] }
+                let w = s.waiters
+                s.waiters.removeAll()
+                return w
+            }
+            for w in waiters { w.resume() }
         }
         if !player.isPlaying { player.play() }
     }
 
     /// Stop current playback (and discard any queued buffers) without
-    /// detaching the player. Useful for barge-in / `speechStarted` handling.
-    @MainActor
+    /// detaching the player. Resumes any pending `waitForPlaybackToDrain`
+    /// awaiters so they don't hang.
     public func interrupt() {
         playerNode?.stop()
-        pending.withLock { $0 = 0 }
+        let waiters = state.withLock { s -> [CheckedContinuation<Void, Never>] in
+            s.pending = 0
+            let w = s.waiters
+            s.waiters.removeAll()
+            return w
+        }
+        for w in waiters { w.resume() }
         playerNode?.play()
     }
 
     /// Returns once every scheduled buffer has been consumed by the output
-    /// hardware. Use this between sending a `function_call_output` and the
-    /// follow-up `createResponse` to avoid overlapping audio (per the
-    /// "Avoid Audio Overlap During Tool Calls" recommendation).
-    public func waitForPlaybackToDrain(pollIntervalMillis: Int = 50) async {
-        while pending.withLock({ $0 > 0 }) {
-            try? await Task.sleep(for: .milliseconds(pollIntervalMillis))
+    /// hardware. Backed by the `.dataPlayedBack` completion callback — no
+    /// polling. Use this between sending a `function_call_output` and the
+    /// follow-up `createResponse` to avoid overlapping audio.
+    public func waitForPlaybackToDrain() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumeImmediately = state.withLock { s -> Bool in
+                guard s.pending > 0 else { return true }
+                s.waiters.append(continuation)
+                return false
+            }
+            if resumeImmediately { continuation.resume() }
         }
     }
 
-    @MainActor
     public func stop() {
         playerNode?.stop()
         playerNode = nil
         attachedEngine = nil
-        pending.withLock { $0 = 0 }
+        let waiters = state.withLock { s -> [CheckedContinuation<Void, Never>] in
+            s.pending = 0
+            let w = s.waiters
+            s.waiters.removeAll()
+            return w
+        }
+        for w in waiters { w.resume() }
     }
 }

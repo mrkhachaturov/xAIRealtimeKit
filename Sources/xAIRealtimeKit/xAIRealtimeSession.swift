@@ -17,17 +17,25 @@ public actor xAIRealtimeSession {
         public var model: xAIRealtimeModel
         public var auth: xAIRealtimeAuth
         public var timeoutSeconds: TimeInterval
+        /// When `true` (default) the session replies to server `ping` events
+        /// with a `pong` carrying the same `ping_timestamp` before yielding
+        /// `.ping` to the caller. Set `false` if your code wants to drive
+        /// keepalive itself. Skipping the pong eventually triggers a
+        /// server-side disconnect.
+        public var autoPong: Bool
 
         public init(
             baseURL: URL = URL(string: "wss://api.x.ai/v1/realtime")!,
             model: xAIRealtimeModel = .grokVoiceLatest,
             auth: xAIRealtimeAuth,
-            timeoutSeconds: TimeInterval = 60
+            timeoutSeconds: TimeInterval = 60,
+            autoPong: Bool = true
         ) {
             self.baseURL = baseURL
             self.model = model
             self.auth = auth
             self.timeoutSeconds = timeoutSeconds
+            self.autoPong = autoPong
         }
 
         /// Build the connection URL with the `model` query parameter.
@@ -47,11 +55,13 @@ public actor xAIRealtimeSession {
 
     private let task: URLSessionWebSocketTask
     private let continuation: AsyncThrowingStream<xAIRealtimeEvent, Error>.Continuation
+    private let autoPong: Bool
     private var receiveTask: Task<Void, Never>?
     private var isClosed = false
 
-    private init(task: URLSessionWebSocketTask) {
+    private init(task: URLSessionWebSocketTask, autoPong: Bool) {
         self.task = task
+        self.autoPong = autoPong
         var local: AsyncThrowingStream<xAIRealtimeEvent, Error>.Continuation!
         self.events = AsyncThrowingStream<xAIRealtimeEvent, Error> { local = $0 }
         self.continuation = local
@@ -86,7 +96,7 @@ public actor xAIRealtimeSession {
         )
         task.resume()
 
-        let s = xAIRealtimeSession(task: task)
+        let s = xAIRealtimeSession(task: task, autoPong: configuration.autoPong)
         await s.startReceiveLoop()
         return s
     }
@@ -140,6 +150,13 @@ public actor xAIRealtimeSession {
         guard let event = xAIRealtimeEvent.decode(text: text) else {
             continuation.yield(.error(code: nil, message: "unparseable server frame"))
             return
+        }
+        // Keepalive — reply before yielding so a slow consumer can't starve the
+        // server's ping budget. Opt out via Configuration.autoPong.
+        if autoPong, case let .ping(timestamp) = event, let ts = timestamp {
+            Task { [weak self] in
+                try? await self?.sendPong(timestamp: ts)
+            }
         }
         continuation.yield(event)
     }
